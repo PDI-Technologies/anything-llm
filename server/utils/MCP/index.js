@@ -78,16 +78,58 @@ class MCPCompatibilityLayer extends MCPHypervisor {
     if (!mcp) return null;
 
     let tools;
+    const userId = _aibitat?.handlerProps?.invocation?.user_id;
     try {
       const response = await mcp.listTools();
       tools = response.tools;
     } catch (error) {
-      this.log(`Failed to list tools for MCP server ${name}:`, error);
-      // Clean up on-demand client if it was created
-      if (onDemandClient) {
-        try { onDemandClient.close(); } catch {}
+      // Handle 401 errors by refreshing token and retrying (impersonation mode)
+      if (
+        userId &&
+        process.env.MCP_AUTH_MODE === "impersonation" &&
+        this.isUnauthorizedError(error)
+      ) {
+        this.log(`listTools for ${name} got 401, attempting token refresh`);
+        const refreshed = await this.refreshOAuthToken(userId);
+        if (refreshed) {
+          try {
+            // Close stale client and create fresh one with new token
+            if (onDemandClient) {
+              try { onDemandClient.close(); } catch {}
+            }
+            const config = this.mcpServerConfigs.find((s) => s.name === name);
+            if (config?.server?.url) {
+              const retryClient = await this.createHttpTransportWithUserContext(
+                config.server,
+                userId
+              );
+              const retryResponse = await retryClient.listTools();
+              tools = retryResponse.tools;
+              mcp = retryClient;
+              onDemandClient = retryClient; // Track for cleanup
+            }
+          } catch (retryError) {
+            this.log(`listTools retry failed for ${name}:`, retryError);
+            if (onDemandClient) {
+              try { onDemandClient.close(); } catch {}
+            }
+            return null;
+          }
+        } else {
+          this.log(`Token refresh failed for ${name}, user may need to re-authenticate`);
+          if (onDemandClient) {
+            try { onDemandClient.close(); } catch {}
+          }
+          return null;
+        }
+      } else {
+        this.log(`Failed to list tools for MCP server ${name}:`, error);
+        // Clean up on-demand client if it was created
+        if (onDemandClient) {
+          try { onDemandClient.close(); } catch {}
+        }
+        return null;
       }
-      return null;
     }
     if (!tools || !tools.length) {
       // Clean up on-demand client if no tools
