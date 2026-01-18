@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useCallback, useLayoutEffect } from "react";
 import paths from "@/utils/paths";
 import useLogo from "@/hooks/useLogo";
 import {
@@ -16,7 +16,7 @@ import {
 import useUser from "@/hooks/useUser";
 import { isMobile } from "react-device-detect";
 import Footer from "../Footer";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import showToast from "@/utils/toast";
 import System from "@/models/system";
@@ -24,11 +24,15 @@ import Option from "./MenuOption";
 import { CanViewChatHistoryProvider } from "../CanViewChatHistory";
 import useAppVersion from "@/hooks/useAppVersion";
 
+const SCROLL_STORAGE_KEY = "settings_sidebar_scroll_position";
+
 export default function SettingsSidebar() {
   const { t } = useTranslation();
   const { logo } = useLogo();
   const { user } = useUser();
+  const location = useLocation();
   const sidebarRef = useRef(null);
+  const scrollContainerRef = useRef(null);
   const [showSidebar, setShowSidebar] = useState(false);
   const [showBgOverlay, setShowBgOverlay] = useState(false);
 
@@ -44,6 +48,46 @@ export default function SettingsSidebar() {
     }
     handleBg();
   }, [showSidebar]);
+
+  // Restore scroll position on route change
+  useLayoutEffect(() => {
+    const savedPosition = sessionStorage.getItem(SCROLL_STORAGE_KEY);
+    if (savedPosition && scrollContainerRef.current) {
+      // Use requestAnimationFrame to ensure DOM layout is complete
+      requestAnimationFrame(() => {
+        if (scrollContainerRef.current) {
+          scrollContainerRef.current.scrollTop = parseInt(savedPosition, 10);
+        }
+      });
+    }
+  }, [location.pathname]);
+
+  // Save scroll position on scroll (debounced)
+  const handleScroll = useCallback(() => {
+    if (scrollContainerRef.current) {
+      sessionStorage.setItem(
+        SCROLL_STORAGE_KEY,
+        scrollContainerRef.current.scrollTop.toString()
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    let timeoutId;
+    const debouncedScroll = () => {
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(handleScroll, 100);
+    };
+
+    container.addEventListener("scroll", debouncedScroll);
+    return () => {
+      container.removeEventListener("scroll", debouncedScroll);
+      clearTimeout(timeoutId);
+    };
+  }, [handleScroll]);
 
   if (isMobile) {
     return (
@@ -105,9 +149,9 @@ export default function SettingsSidebar() {
               </div>
 
               {/* Primary Body */}
-              <div className="h-full flex flex-col w-full justify-between pt-4 overflow-y-scroll no-scroll">
+              <div className="h-full flex flex-col w-full justify-between pt-4 overflow-y-auto">
                 <div className="h-auto md:sidebar-items">
-                  <div className="flex flex-col gap-y-4 pb-[60px] overflow-y-scroll no-scroll">
+                  <div className="flex flex-col gap-y-4 pb-[60px] overflow-y-auto">
                     <SidebarOptions user={user} t={t} />
                     <div className="h-[1.5px] bg-[#3D4147] mx-3 mt-[14px]" />
                     <SupportEmail />
@@ -156,9 +200,12 @@ export default function SettingsSidebar() {
             <div className="text-theme-text-secondary text-sm font-medium uppercase mt-[4px] mb-0 ml-2">
               {t("settings.title")}
             </div>
-            <div className="relative h-[calc(100%-60px)] flex flex-col w-full justify-between pt-[10px] overflow-y-scroll no-scroll">
+            <div
+              ref={scrollContainerRef}
+              className="relative h-[calc(100%-60px)] flex flex-col w-full justify-between pt-[10px] overflow-y-auto"
+            >
               <div className="h-auto sidebar-items">
-                <div className="flex flex-col gap-y-2 pb-[60px] overflow-y-scroll no-scroll">
+                <div className="flex flex-col gap-y-2 pb-[60px]">
                   <SidebarOptions user={user} t={t} />
                   <div className="h-[1.5px] bg-[#3D4147] mx-3 mt-[14px]" />
                   <SupportEmail />
