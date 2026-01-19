@@ -1641,12 +1641,42 @@ function systemEndpoints(app) {
         Buffer.from(id_token.split(".")[1], "base64").toString()
       );
 
-      const { sub, email, name, preferred_username } = idTokenPayload;
+      const { sub, email, name, preferred_username, groups } = idTokenPayload;
 
       if (!sub) {
         console.error("OAuth callback: No sub claim in id_token");
         return response.redirect("/login?error=no_sub_claim");
       }
+
+      // Determine user role based on Okta group membership
+      const determineRoleFromGroups = (userGroups) => {
+        const adminGroup = process.env.OAUTH_ADMIN_GROUP || "";
+        const managerGroup = process.env.OAUTH_MANAGER_GROUP || "";
+
+        // Ensure userGroups is an array
+        const groupList = Array.isArray(userGroups) ? userGroups : [];
+
+        // Check admin group first (highest privilege)
+        if (adminGroup && groupList.includes(adminGroup)) {
+          console.info(
+            `[SSO] User belongs to admin group "${adminGroup}" - assigning admin role`
+          );
+          return "admin";
+        }
+
+        // Check manager group (middle privilege)
+        if (managerGroup && groupList.includes(managerGroup)) {
+          console.info(
+            `[SSO] User belongs to manager group "${managerGroup}" - assigning manager role`
+          );
+          return "manager";
+        }
+
+        // Default role for users not in any privileged group
+        return "default";
+      };
+
+      const assignedRole = determineRoleFromGroups(groups);
 
       // JIT user provisioning - find or create user
       let user = await User._get({ oidc_sub: sub });
@@ -1678,16 +1708,38 @@ function systemEndpoints(app) {
           data: {
             username,
             password: hashedPassword,
-            role: "default",
+            role: assignedRole,
             oidc_sub: sub,
           },
         });
 
         await EventLogs.logEvent(
           "oauth_user_provisioned",
-          { username, oidc_sub: sub },
+          { username, oidc_sub: sub, role: assignedRole },
           user.id
         );
+      } else {
+        // Update role on existing user if group membership changed
+        // Only update if the new role differs from current role
+        if (user.role !== assignedRole) {
+          console.info(
+            `[SSO] User ${user.username} role changed from "${user.role}" to "${assignedRole}" based on group membership`
+          );
+          const { message: roleUpdateError } = await User._update(user.id, {
+            role: assignedRole,
+          });
+          if (roleUpdateError) {
+            console.error("Failed to update user role:", roleUpdateError);
+            // Continue login even if role update fails
+          } else {
+            user = await User._get({ id: user.id });
+            await EventLogs.logEvent(
+              "oauth_role_updated",
+              { username: user.username, oldRole: user.role, newRole: assignedRole },
+              user.id
+            );
+          }
+        }
       }
 
       if (user.suspended) {
