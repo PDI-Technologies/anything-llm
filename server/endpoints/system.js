@@ -1722,8 +1722,9 @@ function systemEndpoints(app) {
         // Update role on existing user if group membership changed
         // Only update if the new role differs from current role
         if (user.role !== assignedRole) {
+          const previousRole = user.role;
           console.info(
-            `[SSO] User ${user.username} role changed from "${user.role}" to "${assignedRole}" based on group membership`
+            `[SSO] User ${user.username} role changed from "${previousRole}" to "${assignedRole}" based on group membership`
           );
           const { message: roleUpdateError } = await User._update(user.id, {
             role: assignedRole,
@@ -1735,7 +1736,7 @@ function systemEndpoints(app) {
             user = await User._get({ id: user.id });
             await EventLogs.logEvent(
               "oauth_role_updated",
-              { username: user.username, oldRole: user.role, newRole: assignedRole },
+              { username: user.username, oldRole: previousRole, newRole: assignedRole },
               user.id
             );
           }
